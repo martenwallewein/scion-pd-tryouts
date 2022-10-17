@@ -16,12 +16,12 @@ type DialOptions struct {
 	NumPaths       int
 }
 
-type DialPacketQuic struct {
+type DialPacket struct {
 	Addr snet.UDPAddr
 	Path snet.Path
 }
 
-type HandshakePacketQuic struct {
+type HandshakePacket struct {
 	Addr     snet.UDPAddr
 	NumPorts int
 	Ports    []int
@@ -29,10 +29,10 @@ type HandshakePacketQuic struct {
 
 type UnderlaySocket interface {
 	Listen() error
+	Local() *snet.UDPAddr
+	AggregateMetrics() *packets.PathMetrics
 	WaitForDialIn() (*snet.UDPAddr, error)
 	WaitForIncomingConn(snet.UDPAddr) (packets.UDPConn, error)
-	NextIncomingConn() (packets.UDPConn, error)
-	/*Dial(remote snet.UDPAddr, path snet.Path, options DialOptions, i int) (packets.UDPConn, error)*/
 	DialAll(remote snet.UDPAddr, path []pathselection.PathQuality, options DialOptions) ([]packets.UDPConn, error)
 	CloseAll() []error
 	GetConnections() []packets.UDPConn

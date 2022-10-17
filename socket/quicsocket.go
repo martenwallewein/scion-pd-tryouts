@@ -12,11 +12,13 @@ import (
 
 	"github.com/lucas-clemente/quic-go"
 	"github.com/martenwallewein/scion-pathdiscovery/packets"
+	lookup "github.com/martenwallewein/scion-pathdiscovery/pathlookup"
 	"github.com/martenwallewein/scion-pathdiscovery/pathselection"
 	"github.com/netsec-ethz/scion-apps/pkg/pan"
 	"github.com/netsec-ethz/scion-apps/pkg/quicutil"
 	"github.com/scionproto/scion/go/lib/snet"
 	"github.com/scionproto/scion/go/lib/snet/path"
+	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 	"inet.af/netaddr"
 )
@@ -28,7 +30,7 @@ type QUICReliableConn struct {
 	path         *snet.Path
 	peer         string
 	remote       *snet.UDPAddr
-	metrics      packets.PathMetrics
+	metrics      *packets.PathMetrics
 	local        *snet.UDPAddr
 }
 
@@ -63,6 +65,7 @@ func (qc *QUICReliableConn) Close() error {
 		return err
 	}
 
+	// Close session and listener if available, to free occupied ports
 	if qc.session != nil {
 		err := qc.session.CloseWithError(quic.ApplicationErrorCode(0), "done")
 		if err != nil {
@@ -81,7 +84,7 @@ func (qc *QUICReliableConn) Close() error {
 }
 
 func (qc *QUICReliableConn) GetMetrics() *packets.PathMetrics {
-	return &qc.metrics
+	return qc.metrics
 }
 
 func (qc *QUICReliableConn) GetPath() *snet.Path {
@@ -135,6 +138,56 @@ type QUICSocket struct {
 	ConnectedPeers []RemotePeer
 }
 
+func (s *QUICSocket) GetMetrics() []*packets.PathMetrics {
+	return packets.GetMetricsDB().GetBySocket(s.localAddr)
+}
+
+func (s *QUICSocket) Local() *snet.UDPAddr {
+	return s.localAddr
+}
+
+func (s *QUICSocket) AggregateMetrics() *packets.PathMetrics {
+	ms := packets.GetMetricsDB().GetBySocket(s.localAddr)
+	sumBwMbitsRead := make([]int64, 0)
+	sumBwMbitsWrite := make([]int64, 0)
+	for i, m := range ms {
+		bwMbits := make([]int64, 0)
+		for j, b := range m.ReadBandwidth {
+			val := int64(float64(b*8) / 1024 / 1024)
+			bwMbits = append(bwMbits, val)
+			if i == 0 {
+				sumBwMbitsRead = append(sumBwMbitsRead, val)
+			} else {
+				// Avoid OoR errors
+				if j < len(sumBwMbitsRead) {
+					sumBwMbitsRead[j] += val
+				}
+
+			}
+		}
+		for j, b := range m.WrittenBandwidth {
+			val := int64(float64(b*8) / 1024 / 1024)
+			bwMbits = append(bwMbits, val)
+			if i == 0 {
+				sumBwMbitsWrite = append(sumBwMbitsWrite, val)
+			} else {
+				// Avoid OoR errors
+				if j < len(sumBwMbitsWrite) {
+					sumBwMbitsWrite[j] += val
+				}
+
+			}
+		}
+		log.Error(bwMbits)
+	}
+	// TODO: Maybe add other fields
+	pm := &packets.PathMetrics{
+		ReadBandwidth:    sumBwMbitsRead,
+		WrittenBandwidth: sumBwMbitsWrite,
+	}
+	return pm
+}
+
 func NewQUICSocket(local string) *QUICSocket {
 	s := QUICSocket{
 		local:          local,
@@ -148,6 +201,7 @@ func NewQUICSocket(local string) *QUICSocket {
 }
 
 func (s *QUICSocket) Listen() error {
+	logrus.Debug("[QuicSocket] Listening on ", s.local, " ...")
 	lAddr, err := snet.ParseUDPAddr(s.local)
 	if err != nil {
 		return err
@@ -167,6 +221,7 @@ func (s *QUICSocket) Listen() error {
 
 	s.localAddr = lAddr
 	s.listener = listener
+	logrus.Debug("[QuicSocket] Listen on ", s.local, " successful")
 	return err
 }
 
@@ -179,26 +234,26 @@ func (s *QUICSocket) WaitForIncomingConn(lAddr snet.UDPAddr) (packets.UDPConn, e
 		Certificates: quicutil.MustGenerateSelfSignedCert(),
 		NextProtos:   []string{"scion-filetransfer"},
 	}
+	logrus.Debug("[QuicSocket] Waiting for Incoming Conn, new Listener on ", lAddr.String())
 	listener, err := pan.ListenQUIC(context.Background(), ipP.Get(), nil, tlsCfg, nil)
 	if err != nil {
 		return nil, err
 	}
-
-	log.Warn("PAN LISTEN NEW")
 
 	session, err := listener.Accept(context.Background())
 	if err != nil {
 		return nil, err
 	}
 
-	log.Warn("PAN SESSION NEW")
+	logrus.Debug("[QuicSocket] New Session on ", lAddr.String())
 
 	stream, err := session.AcceptStream(context.Background())
 	if err != nil {
 		return nil, err
 	}
 
-	log.Warn("PAN STREAM NEW")
+	logrus.Debug("[QuicSocket] New Stream on ", lAddr.String())
+	logrus.Debug("[QuicSocket] Reading handshake on ", lAddr.String())
 
 	bts := make([]byte, packets.PACKET_SIZE)
 	_, err = stream.Read(bts)
@@ -206,7 +261,7 @@ func (s *QUICSocket) WaitForIncomingConn(lAddr snet.UDPAddr) (packets.UDPConn, e
 		return nil, err
 	}
 
-	p := DialPacketQuic{}
+	p := DialPacket{}
 	network := bytes.NewBuffer(bts) // Stand-in for a network connection
 	dec := gob.NewDecoder(network)
 	err = dec.Decode(&p)
@@ -214,10 +269,10 @@ func (s *QUICSocket) WaitForIncomingConn(lAddr snet.UDPAddr) (packets.UDPConn, e
 		return nil, err
 	}
 
-	log.Warn("GOt dial packet ", p)
+	logrus.Debug("[QuicSocket] Got handshake from remote ", p.Addr.String(), " over path ", lookup.PathToString(p.Path))
 
 	// Send reply
-	ret := DialPacketQuic{}
+	ret := DialPacket{}
 	ret.Addr = lAddr
 	ret.Path = p.Path
 
@@ -226,7 +281,7 @@ func (s *QUICSocket) WaitForIncomingConn(lAddr snet.UDPAddr) (packets.UDPConn, e
 
 	err = enc.Encode(ret)
 	stream.Write(network2.Bytes())
-	log.Warn("Wrote response")
+	logrus.Debug("[QuicSocket] Answer handshake to ", p.Addr.String())
 
 	quicConn := &QUICReliableConn{
 		internalConn: stream,
@@ -234,18 +289,18 @@ func (s *QUICSocket) WaitForIncomingConn(lAddr snet.UDPAddr) (packets.UDPConn, e
 		listener:     listener,
 		path:         &p.Path,
 		remote:       &p.Addr,
-		metrics:      *packets.NewPathMetrics(1000 * time.Millisecond),
+		metrics:      packets.GetMetricsDB().GetOrCreate(s.localAddr, &p.Path),
 		local:        &lAddr,
 	}
 
-	log.Errorf("%p", quicConn)
-
 	s.conns = append(s.conns, quicConn)
+	logrus.Debug("[QuicSocket] Added new Conn: ", s.local, " to ", p.Addr.String())
 
 	return quicConn, nil
 }
 
 // TODO: This needs to be done for each incoming conn
+/*
 func (s *QUICSocket) NextIncomingConn() (packets.UDPConn, error) {
 	lAddr := s.localAddr.Copy()
 	lAddr.Host.Port = lAddr.Host.Port + 14*(len(s.conns)+1)
@@ -277,7 +332,7 @@ func (s *QUICSocket) NextIncomingConn() (packets.UDPConn, error) {
 		return nil, err
 	}
 
-	p := DialPacketQuic{}
+	p := DialPacket{}
 	network := bytes.NewBuffer(bts) // Stand-in for a network connection
 	dec := gob.NewDecoder(network)
 	err = dec.Decode(&p)
@@ -291,14 +346,15 @@ func (s *QUICSocket) NextIncomingConn() (packets.UDPConn, error) {
 		listener:     listener,
 		path:         &p.Path,
 		remote:       &p.Addr,
-		metrics:      *packets.NewPathMetrics(1000 * time.Millisecond),
+		metrics:      packets.GetMetricsDB().GetOrCreate(s.localAddr, &p.Path),
 		local:        s.localAddr,
 	}
 
 	return quicConn, nil
-}
+}*/
 
 func (s *QUICSocket) WaitForDialIn() (*snet.UDPAddr, error) {
+	logrus.Debug("[QuicSocket] Accepting stream on main conn ", s.local)
 	session, err := s.listener.Accept(context.Background())
 	if err != nil {
 		return nil, err
@@ -309,8 +365,10 @@ func (s *QUICSocket) WaitForDialIn() (*snet.UDPAddr, error) {
 		return nil, err
 	}
 
-	log.Debugf("Got base conn")
+	logrus.Debug("[QuicSocket] Got base conn on ", s.local)
 	s.Stream = stream
+
+	logrus.Debug("[QuicSocket] Accepting handshake on ", s.local)
 
 	bts := make([]byte, packets.PACKET_SIZE)
 	_, err = stream.Read(bts)
@@ -318,7 +376,7 @@ func (s *QUICSocket) WaitForDialIn() (*snet.UDPAddr, error) {
 		return nil, err
 	}
 
-	p := HandshakePacketQuic{}
+	p := HandshakePacket{}
 	network := bytes.NewBuffer(bts) // Stand-in for a network connection
 	dec := gob.NewDecoder(network)
 	err = dec.Decode(&p)
@@ -326,7 +384,7 @@ func (s *QUICSocket) WaitForDialIn() (*snet.UDPAddr, error) {
 		return nil, err
 	}
 
-	log.Debug(p.Ports)
+	logrus.Debug("[QuicSocket] Got handshake from ", p.Addr.String(), " for ports=", len(p.Ports))
 
 	remotePeer := RemotePeer{
 		Stream: stream,
@@ -335,7 +393,7 @@ func (s *QUICSocket) WaitForDialIn() (*snet.UDPAddr, error) {
 	s.ConnectedPeers = append(s.ConnectedPeers, remotePeer)
 
 	var wg sync.WaitGroup
-	ret := HandshakePacketQuic{}
+	ret := HandshakePacket{}
 	ret.Ports = make([]int, 0)
 	for i := 0; i < p.NumPorts; i++ {
 		wg.Add(1)
@@ -343,15 +401,12 @@ func (s *QUICSocket) WaitForDialIn() (*snet.UDPAddr, error) {
 		go func(i int) {
 			l := s.localAddr.Copy()
 			l.Host.Port = l.Host.Port + 11*(i+1) + 52*len(s.ConnectedPeers)
-			// l.Host.Port = p.Ports[i+1]
-			log.Warn("Listen add on ", l.String())
-			// Waitgroup here before sending back response
 			_, err := s.WaitForIncomingConn(*l)
 			if err != nil {
 				log.Error(err)
 				return
 			}
-			log.Debugf("Dialed In %d of %d on %s from remote %s", i+1, p.NumPorts, l.String(), p.Addr.String())
+			logrus.Debugf("[QuicSocket] Dialed In %d of %d on %s from remote %s", i+1, p.NumPorts, l.String(), p.Addr.String())
 			wg.Done()
 		}(i)
 	}
@@ -367,8 +422,8 @@ func (s *QUICSocket) WaitForDialIn() (*snet.UDPAddr, error) {
 
 	err = enc.Encode(ret)
 	stream.Write(network2.Bytes())
-	log.Warn("Wrote response")
-	// Wait for responses
+	logrus.Debug("[QuicSocket] Sending handshake response to ", p.Addr.String())
+
 	wg.Wait()
 	addr := p.Addr
 	return &addr, nil
@@ -387,9 +442,10 @@ func (s *QUICSocket) DialAll(remote snet.UDPAddr, path []pathselection.PathQuali
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"scion-filetransfer"},
 	}
-	// Set Pinging Selector with active probing on two paths
-	selector := &pan.DefaultSelector{}
-	// selector.SetActive(2)
+
+	logrus.Debug("[QuicSocket] Dialing all to ", remote.String())
+
+	selector := &pathselection.FixedSelector{}
 	session, err := pan.DialQUIC(context.Background(), netaddr.IPPort{}, panAddr, nil, selector, "", tlsCfg, nil)
 	if err != nil {
 		return nil, err
@@ -400,7 +456,7 @@ func (s *QUICSocket) DialAll(remote snet.UDPAddr, path []pathselection.PathQuali
 		return nil, err
 	}
 
-	log.Debug("Dialed base conn to ", remote.String())
+	logrus.Debug("[QuicSocket] Opened base conn to ", remote.String())
 
 	// TODO: Check duplicates
 	remotePeer := RemotePeer{
@@ -410,7 +466,7 @@ func (s *QUICSocket) DialAll(remote snet.UDPAddr, path []pathselection.PathQuali
 	s.ConnectedPeers = append(s.ConnectedPeers, remotePeer)
 
 	// Send handshake
-	ret := HandshakePacketQuic{}
+	ret := HandshakePacket{}
 	ret.Addr = *s.localAddr
 	ret.NumPorts = options.NumPaths
 	ret.Ports = make([]int, options.NumPaths)
@@ -419,8 +475,6 @@ func (s *QUICSocket) DialAll(remote snet.UDPAddr, path []pathselection.PathQuali
 		port := remote.Host.Port + (i+1)*11 + 52*len(s.ConnectedPeers) // TODO: Boundary check, better ranges
 		ret.Ports = append(ret.Ports, port)
 	}
-
-	log.Debug(ret)
 
 	var network2 bytes.Buffer
 	enc := gob.NewEncoder(&network2)
@@ -431,7 +485,7 @@ func (s *QUICSocket) DialAll(remote snet.UDPAddr, path []pathselection.PathQuali
 	}
 
 	stream.Write(network2.Bytes())
-	log.Warn("Wrote hs")
+	logrus.Debug("[QuicSocket] Started handshake to ", remote.String(), " with ports=", len(ret.Ports))
 
 	bts := make([]byte, packets.PACKET_SIZE)
 	_, err = stream.Read(bts)
@@ -439,14 +493,7 @@ func (s *QUICSocket) DialAll(remote snet.UDPAddr, path []pathselection.PathQuali
 		return nil, err
 	}
 
-	// TODO: Why is this packet not working properly
-	// Wait for response
-	/*bts, err := ioutil.ReadAll(stream)
-	if err != nil {
-		log.Error("From readAll")
-		return nil, err
-	}*/
-	ps := HandshakePacketQuic{}
+	ps := HandshakePacket{}
 	network := bytes.NewBuffer(bts) // Stand-in for a network connection
 	dec := gob.NewDecoder(network)
 	err = dec.Decode(&ps)
@@ -454,8 +501,7 @@ func (s *QUICSocket) DialAll(remote snet.UDPAddr, path []pathselection.PathQuali
 		log.Error("From decode")
 		return nil, err
 	}
-
-	log.Debug("Got response")
+	logrus.Debug("[QuicSocket] Completed handshake to ", remote.String(), " with ports=", len(ret.Ports))
 
 	// TODO: Ports may change here...
 	var wg sync.WaitGroup
@@ -464,9 +510,9 @@ func (s *QUICSocket) DialAll(remote snet.UDPAddr, path []pathselection.PathQuali
 		wg.Add(1)
 		go func(i int, p snet.Path) {
 			l := remote.Copy()
-			// l.Host.Port = l.Host.Port + (i+1)*11 + 52*len(s.ConnectedPeers)
+
 			l.Host.Port = ps.Ports[i]
-			log.Warn("Dial to ", l.String())
+
 			local := s.localAddr.Copy()
 			local.Host.Port = local.Host.Port + (i+1)*11 + 52*len(s.ConnectedPeers)
 			// Waitgroup here before sending back response
@@ -475,9 +521,9 @@ func (s *QUICSocket) DialAll(remote snet.UDPAddr, path []pathselection.PathQuali
 				log.Error(err)
 				return
 			}
-			log.Warnf("Dialed %d of %d on %s to remote %s", i, options.NumPaths, s.local, l.String())
+			logrus.Debugf("[QuicSocket] Dialed %d of %d on %s to remote %s", i, options.NumPaths, s.local, l.String())
 			wg.Done()
-		}(i, p.Path)
+		}(i, p.SnetPath)
 	}
 	wg.Wait()
 
@@ -502,24 +548,24 @@ func (s *QUICSocket) Dial(local, remote snet.UDPAddr, path snet.Path) (packets.U
 	ipP.Set(shortAddr)
 
 	// Set Pinging Selector with active probing on two paths
-	selector := &pan.DefaultSelector{}
-	log.Warn(panAddr)
+	selector := &pathselection.FixedSelector{}
+	selector.SetPathFromSnet(path)
+
+	logrus.Debug("[QuicSocket] Dial new conn from ", local.String(), " to ", remote.String())
 	session, err := pan.DialQUIC(context.Background(), ipP.Get(), panAddr, nil, selector, "", tlsCfg, nil)
 	if err != nil {
 		return nil, err
 	}
-
-	log.Warn("SESSION FROM ", local.String(), " TO ", remote.String())
 
 	stream, err := session.OpenStreamSync(context.Background())
 	if err != nil {
 		return nil, err
 	}
 
-	log.Warn("STREAM FROM ", local.String(), " TO ", remote.String())
+	logrus.Debug("[QuicSocket] Dialed new conn from ", local.String(), " to ", remote.String(), " over path ", lookup.PathToString(path))
 
 	// Send handshake
-	ret := DialPacketQuic{}
+	ret := DialPacket{}
 	ret.Addr = local
 	ret.Path = path
 
@@ -536,34 +582,24 @@ func (s *QUICSocket) Dial(local, remote snet.UDPAddr, path snet.Path) (packets.U
 		session:      session,
 		path:         &path,
 		remote:       &remote,
-		metrics:      *packets.NewPathMetrics(1000 * time.Millisecond),
+		metrics:      packets.GetMetricsDB().GetOrCreate(s.localAddr, &path),
 		// local:        session.LocalAddr(), // TODO: Local Addr
 	}
-	log.Errorf("%p", quicConn)
-
-	/*go func() {
-		for {
-			time.Sleep(1 * time.Second)
-			quicConn.Write(network2.Bytes())
-		}
-
-	}()*/
 
 	// For loop, deadline, write packet, read response
 	for i := 0; i < 5; i++ {
-		log.Warn("WRITE PACKET")
+		logrus.Debug("[QuicSocket] Writing handshake from ", local.String(), " to ", remote.String())
 		quicConn.Write(network2.Bytes())
 
 		quicConn.SetReadDeadline(time.Now().Add(3 * time.Second))
 		bts := make([]byte, packets.PACKET_SIZE)
-		n, err := quicConn.Read(bts)
-		log.Warn("Read ", n, " FROM DIAL RESPONSE")
+		_, err := quicConn.Read(bts)
+		logrus.Debug("[QuicSocket] Read handshake response from ", local.String(), " to ", remote.String())
 		if err != nil {
-			log.Error("From DIAL Response ", err)
 			i++
 			continue
 		}
-		p := DialPacketQuic{}
+		p := DialPacket{}
 		network := bytes.NewBuffer(bts) // Stand-in for a network connection
 		dec := gob.NewDecoder(network)
 		err = dec.Decode(&p)
@@ -573,7 +609,7 @@ func (s *QUICSocket) Dial(local, remote snet.UDPAddr, path snet.Path) (packets.U
 		break
 	}
 
-	log.Error(ret)
+	logrus.Debug("[QuicSocket] Dial complete from ", local.String(), " to ", remote.String())
 
 	s.conns = append(s.conns, quicConn)
 	return quicConn, nil

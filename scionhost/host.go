@@ -28,6 +28,7 @@ import (
 	"github.com/scionproto/scion/go/lib/snet"
 	"github.com/scionproto/scion/go/lib/snet/addrutil"
 	"github.com/scionproto/scion/go/lib/sock/reliable"
+	"github.com/sirupsen/logrus"
 	"inet.af/netaddr"
 )
 
@@ -173,11 +174,12 @@ func defaultLocalAddr(local netaddr.IPPort) (netaddr.IPPort, error) {
 }
 
 func (h *hostContext) QueryPaths(ctx context.Context, dst pan.IA) ([]snet.Path, error) {
+	logrus.Debug("[HostContext] Query Paths to ", dst.String())
 	flags := daemon.PathReqFlags{Refresh: false, Hidden: false}
 	snetPaths, err := h.sciond.Paths(ctx, addr.IA(dst), addr.IA(h.ia), flags)
 	if err != nil {
 		return nil, err
 	}
-
+	logrus.Debug("[HostContext] Got %d paths to %s", len(snetPaths), dst.String())
 	return snetPaths, nil
 }

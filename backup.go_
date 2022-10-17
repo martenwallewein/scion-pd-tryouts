@@ -1,0 +1,150 @@
+type LastMetrics struct {
+	AllBytes    int64
+	Performance int64
+	NumAdds     int
+}
+
+
+
+type DisjointPathselection struct {
+	local            *smp.PanSocket
+	remoteSockets    []*smp.PanSocket
+	selectedPathSets map[string][]string
+	/*allPaths      []PathWrap*/
+	NumExploreConns int
+	metricsMap      map[string]LastMetrics // Indicates the performance of the particular pathset -> id = path1|path2|path3 etc
+	metricsTicker   *time.Ticker
+}
+
+func numPathsConflict(path1, path2 snet.Path) int {
+	path1Interfaces := path1.Metadata().Interfaces
+	path2Interfaces := path2.Metadata().Interfaces
+	conflicts := 0
+	for i, intP1 := range path1Interfaces {
+		for j, intP2 := range path2Interfaces {
+			if i == 0 && j == 0 {
+				continue
+			}
+			if i == (len(path1Interfaces)-1) && j == (len(path2Interfaces)-1) {
+				continue
+			}
+			if intP1.IA.Equal(intP2.IA) && intP1.ID == intP2.ID {
+				conflicts++
+			}
+		}
+	}
+	return conflicts
+}
+
+func (dj *DisjointPathselection) UpdateMetrics() error {
+	for _, sock := range dj.remoteSockets {
+		paths := make([]snet.Path, 0)
+		pathSetId := ""
+		var sendBw int64 = 0
+		for _, c := range sock.UnderlaySocket.GetConnections() {
+			p := c.GetPath()
+			paths = append(paths, *p)
+			pathSetId += pathselection.PathToString(*p) + "|"
+			m := c.GetMetrics()
+			sendBw += m.WrittenBytes
+		}
+		m := dj.metricsMap[pathSetId]
+		diff := sendBw - m.AllBytes
+		m.Performance += diff
+		m.NumAdds++
+
+	}
+	return nil
+}
+
+func (dj *DisjointPathselection) UpdatePaths() error {
+
+	
+	for _, sock := range dj.remoteSockets {
+		paths := make([]snet.Path, 0)
+		pathSetId := ""
+		for _, c := range sock.UnderlaySocket.GetConnections() {
+			p := c.GetPath()
+			paths = append(paths, *p)
+			pathSetId += pathselection.PathToString(*p) + "|"
+		}
+
+		// Find a new pathset for a socket
+		if dj.metricsMap[pathSetId].NumAdds >= 5 {
+			pathsSets := dj.selectedPathSets[sock.Peer.String()]
+
+			paths, pathSetId, err := getNextUnusedPathset(sock, pathsSets)
+
+			// 
+			dj.metricsMap[pathSetId] = LastMetrics{}
+
+		}
+	}
+	return nil
+}
+
+/*
+func (dj *DisjointPathselection) UpdatePaths() error {
+	dj.allPaths = make([]PathWrap, 0)
+	for _, sock := range dj.remoteSockets {
+		paths, err := sock.GetAvailablePaths()
+		if err != nil {
+			return err
+		}
+
+		for _, p := range paths {
+			pathWrap := PathWrap{
+				Address:      *sock.Peer,
+				Path:         p,
+				NumConflicts: 0,
+			}
+			dj.allPaths = append(dj.allPaths, pathWrap)
+		}
+	}
+
+	// Add conflicts
+	for i, path := range dj.allPaths {
+		for _, path2 := range dj.allPaths[i:] {
+			curConflicts := numPathsConflict(path.Path, path2.Path)
+			path.NumConflicts += curConflicts
+		}
+	}
+
+	// log.Error("Got all paths ", allPaths)
+
+	// Start at the top (shortest path) and remove all conflicting paths
+	pathCount := 0
+	conflictCount := 0
+	netPaths := make([]PathWrap, 0)
+	for pathCount < 10 {
+		for _, path := range dj.allPaths {
+			if pathCount >= 10 {
+				break
+			}
+			if path.NumConflicts == conflictCount {
+				netPaths = append(netPaths, path)
+				pathCount++
+			}
+		}
+	}
+
+	// We need a fraction on how many conns should be used to "explore"
+	// Exploring means we have some conns that periodically try out paths
+
+	// logrus.Errorf("Got new paths ", netPaths)
+
+	// Add the remaining paths properly to the peers in the Data map
+	// Having peers with no paths is intended here...
+	for _, newPath := range netPaths {
+		addr := newPath.Address.String()
+		pp := p.Get(addr)
+		pp.UsedPaths = append(pp.UsedPaths, newPath.Path)
+		p.Data[addr] = pp
+		// log.Error("BESTPATH ", pathselection.PathToString(newPath.Path), " for addr ", addr)
+		// log.Info(pp)
+
+	}
+
+	return nil
+}
+*/

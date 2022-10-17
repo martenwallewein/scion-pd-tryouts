@@ -1,10 +1,6 @@
 package pathselection
 
-import (
-	"sort"
-	"time"
-)
-
+/*
 type byLatency []PathQuality
 
 func (pathSet byLatency) Len() int {
@@ -34,3 +30,4 @@ func (pathSet *PathSet) GetPathLowLatency(number int) *PathSet {
 	sort.Sort(byLatency(pathSet.Paths))
 	return SelectPaths(number, pathSet)
 }
+*/

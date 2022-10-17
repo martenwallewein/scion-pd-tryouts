@@ -1,9 +1,6 @@
 package pathselection
 
-import (
-	"sort"
-)
-
+/*
 type byMTU []PathQuality
 
 func (pathQualities byMTU) Len() int {
@@ -23,3 +20,4 @@ func (pathSet *PathSet) GetPathLargeMTU(number int) *PathSet {
 	sort.Sort(byMTU(pathSet.Paths))
 	return SelectPaths(number, pathSet)
 }
+*/

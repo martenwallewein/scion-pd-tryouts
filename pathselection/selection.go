@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/martenwallewein/scion-pathdiscovery/packets"
+	lookup "github.com/martenwallewein/scion-pathdiscovery/pathlookup"
+	"github.com/netsec-ethz/scion-apps/pkg/pan"
+	"github.com/sirupsen/logrus"
 
 	"github.com/scionproto/scion/go/lib/addr"
 	"github.com/scionproto/scion/go/lib/snet"
@@ -34,7 +37,8 @@ type PathQuality struct {
 	Bytes        int
 	Duration     time.Duration
 	MaxBandwidth int64
-	Path         snet.Path
+	Path         pan.Path
+	SnetPath     snet.Path
 	Id           string
 }
 
@@ -76,6 +80,7 @@ func (db *InMemoryPathQualityDatabase) SetConnections(conns []packets.UDPConn) {
 }
 
 func (db *InMemoryPathQualityDatabase) UpdateMetrics() {
+	logrus.Debug("[PathDB] UpdateMetrics called")
 	// TODO: Do listen Cons have paths?
 	for _, v := range db.connections {
 
@@ -121,7 +126,7 @@ func (db *InMemoryPathQualityDatabase) getPathQuality(addr *snet.UDPAddr, path *
 	}
 
 	for _, v := range pathSet.Paths {
-		if path != nil && bytes.Compare(v.Path.Path().Raw, (*path).Path().Raw) == 0 {
+		if path != nil && bytes.Compare(v.SnetPath.Path().Raw, (*path).Path().Raw) == 0 {
 			pathQuality = &v
 		}
 	}
@@ -151,6 +156,8 @@ func calcAddrHash(addr *snet.UDPAddr) string {
 }
 
 func (db *InMemoryPathQualityDatabase) GetPathSet(addr *snet.UDPAddr) (PathSet, error) {
+	// logrus.Error("Get entry ", addr.String())
+	// logrus.Error(db.hashMap)
 	hash := calcAddrHash(addr)
 	index, contained := db.hashMap[hash]
 	if contained {
@@ -204,11 +211,12 @@ func NewInMemoryPathQualityDatabase() *InMemoryPathQualityDatabase {
 
 func (db *InMemoryPathQualityDatabase) UpdatePathQualities(addr *snet.UDPAddr, metricsInterval time.Duration) error {
 	// TODO: Fix with pan
-	paths := make([]snet.Path, 0)
-	/*paths, err := appnet.DefNetwork().PathQuerier.Query(context.Background(), addr.IA)
+	// paths := make([]snet.Path, 0)
+	logrus.Debug("[PathDB] UpdatePathQualities called for ", addr.String())
+	paths, err := lookup.PathLookup(addr.String())
 	if err != nil {
 		return err
-	}*/
+	}
 	var pathQualities []PathQuality
 	for _, path := range paths {
 
@@ -221,7 +229,7 @@ func (db *InMemoryPathQualityDatabase) UpdatePathQualities(addr *snet.UDPAddr, m
 			h.Write(path.Path().Raw)
 			bs := h.Sum(nil)
 			id := fmt.Sprintf("%x", bs)
-			pathEntry := PathQuality{Path: path, Id: id, metrics: *packets.NewPathMetrics(metricsInterval)}
+			pathEntry := PathQuality{SnetPath: path, Id: id, metrics: *packets.NewPathMetrics(metricsInterval)}
 			pathQualities = append(pathQualities, pathEntry)
 		}
 
@@ -232,6 +240,7 @@ func (db *InMemoryPathQualityDatabase) UpdatePathQualities(addr *snet.UDPAddr, m
 		//update PathSetDB entry if already existing
 		db.pathSetDB[i] = tmpPathSet
 	} else {
+		logrus.Debug("[PathDB] Add new entry ", addr.String())
 		db.pathSetDB = append(db.pathSetDB, tmpPathSet)
 		hash := calcAddrHash(addr)
 		db.hashMap[hash] = len(db.pathSetDB) - 1
@@ -242,7 +251,7 @@ func (db *InMemoryPathQualityDatabase) UpdatePathQualities(addr *snet.UDPAddr, m
 func UnwrapPathset(pathset PathSet) []snet.Path {
 	paths := make([]snet.Path, 0)
 	for _, p := range pathset.Paths {
-		paths = append(paths, p.Path)
+		paths = append(paths, p.SnetPath)
 	}
 
 	return paths
@@ -252,7 +261,7 @@ func WrapPathset(paths []snet.Path) PathSet {
 	pathQualities := make([]PathQuality, 0)
 	for _, p := range paths {
 		pq := PathQuality{
-			Path: p,
+			SnetPath: p,
 		}
 		pathQualities = append(pathQualities, pq)
 	}
@@ -263,40 +272,9 @@ func WrapPathset(paths []snet.Path) PathSet {
 	return pathsSet
 }
 
-func PathToString(path snet.Path) string {
-	if path == nil {
-		return ""
-	}
-	intfs := path.Metadata().Interfaces
-	if len(intfs) == 0 {
-		return ""
-	}
-	var hops []string
-	intf := intfs[0]
-	hops = append(hops, fmt.Sprintf("%s %s",
-		intf.IA,
-		intf.ID,
-	))
-	for i := 1; i < len(intfs)-1; i += 2 {
-		inIntf := intfs[i]
-		outIntf := intfs[i+1]
-		hops = append(hops, fmt.Sprintf("%s %s %s",
-			inIntf.ID,
-			inIntf.IA,
-			outIntf.ID,
-		))
-	}
-	intf = intfs[len(intfs)-1]
-	hops = append(hops, fmt.Sprintf("%s %s",
-		intf.ID,
-		intf.IA,
-	))
-	return fmt.Sprintf("[%s]", strings.Join(hops, ">"))
-}
-
 func FindIndexByPathString(pq []PathQuality, s string) int {
 	for i, v := range pq {
-		if s == PathToString(v.Path) {
+		if s == lookup.PathToString(v.SnetPath) {
 			return i
 		}
 	}

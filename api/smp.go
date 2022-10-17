@@ -59,6 +59,33 @@ func NewPanSock(local string, peer *snet.UDPAddr, options *PanSocketOptions) *Pa
 	return sock
 }
 
+func (mp *PanSocket) GetMetrics() []*packets.PathMetrics {
+	return packets.GetMetricsDB().GetBySocket(mp.UnderlaySocket.Local())
+}
+
+func (mp *PanSocket) AverageReadBandwidth() int64 {
+	return mp.AggregateMetrics().AverageReadBandwidth()
+}
+
+func (mp *PanSocket) AverageWriteBandwidth() int64 {
+	return mp.AggregateMetrics().AverageWriteBandwidth()
+}
+
+func (mp *PanSocket) AggregateMetrics() *packets.PathMetrics {
+	return mp.UnderlaySocket.AggregateMetrics()
+}
+
+func (mp *PanSocket) GetCurrentPathset() pathselection.PathSet {
+	conns := mp.UnderlaySocket.GetConnections()
+	ps := make([]snet.Path, 0)
+	for _, c := range conns {
+		p := c.GetPath()
+		ps = append(ps, *p)
+	}
+
+	return pathselection.WrapPathset(ps)
+}
+
 // Listen on the provided local address
 // This call does not wait for incoming connections
 // and shout be called for both, waiting and dialing sockets
@@ -97,25 +124,10 @@ func (mp *PanSocket) WaitForPeerConnect() (*snet.UDPAddr, error) {
 	// selectedPathSet := <-mp.OnPathsetChange
 	// time.Sleep(1 * time.Second)
 	// dial all paths selected by user algorithm
-
+	mp.PathQualityDB.UpdatePathQualities(remote, 1*time.Second)
 	mp.collectMetrics()
-	go func() {
-		conns := mp.UnderlaySocket.GetConnections()
-		mp.PathQualityDB.SetConnections(conns)
-		/*for {
-			log.Debug("CLIENT Waiting for new connections...")
-			conn, err := mp.UnderlaySocket.NextIncomingConn()
-			// New conn
-			if conn == nil && err == nil {
-				log.Warn("CLIENT Socket does not implement NextIncomingConn, stopping here...")
-				return
-			}
-			if err != nil {
-				log.Errorf("CLIENT Failed to wait for incoming connection %s", err.Error())
-				return
-			}
-		}*/
-	}()
+	conns := mp.UnderlaySocket.GetConnections()
+	mp.PathQualityDB.SetConnections(conns)
 
 	return remote, err
 }
@@ -126,7 +138,7 @@ func (mp *PanSocket) collectMetrics() {
 		for {
 			select {
 			case <-mp.metricsTicker.C:
-				// mp.PathQualityDB.UpdateMetrics()
+				mp.PathQualityDB.UpdateMetrics()
 				break
 				// case <-mp.metricsChan:
 				// 	return
@@ -164,6 +176,7 @@ func (mp *PanSocket) DialAll(pathAlternatives *pathselection.PathSet, options *s
 	log.Debugf("Dialed all to %s, got %d connections", mp.Peer.String(), len(conns))
 
 	mp.PathQualityDB.SetConnections(conns)
+	mp.PathQualityDB.UpdatePathQualities(&pathAlternatives.Address, 1*time.Second)
 	return nil
 }
 

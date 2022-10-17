@@ -1,9 +1,6 @@
 package pathselection
 
-import (
-	"sort"
-)
-
+/*
 type byHopCount []PathQuality
 
 func (pathSet byHopCount) Len() int {
@@ -22,4 +19,4 @@ func (pathSet byHopCount) Less(i, j int) bool {
 func (pathSet *PathSet) GetPathSmallHopCount(number int) *PathSet {
 	sort.Sort(byHopCount(pathSet.Paths))
 	return SelectPaths(number, pathSet)
-}
+}*/
