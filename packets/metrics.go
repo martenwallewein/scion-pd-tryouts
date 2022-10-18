@@ -124,8 +124,32 @@ func (m *PathMetrics) AverageWriteBandwidth() int64 {
 		return 0
 	}
 	var val int64
-	for _, item := range m.WrittenBandwidth {
+	for i, item := range m.WrittenBandwidth {
+		if i == 0 { // First one is not representative
+			continue
+		}
 		val += item
+	}
+
+	val = val / int64(size)
+	return val
+}
+
+func (m *PathMetrics) LastAverageWriteBandwidth(lastElements int) int64 {
+	size := len(m.WrittenBandwidth)
+	if size == 0 {
+		return 0
+	}
+	var val int64
+	for i, item := range m.WrittenBandwidth {
+		if i == 0 { // First one is not representative
+			continue
+		}
+
+		if i >= size-lastElements-1 {
+			val += item
+		}
+
 	}
 
 	val = val / int64(size)

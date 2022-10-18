@@ -161,7 +161,7 @@ func (dj *DisjointPathselection) InitialPathset() (pathselection.PathSet, error)
 	if err != nil {
 		return ps, err
 	}
-	logrus.Debug(ps.Paths)
+	logrus.Error("[DisjointPathSelection] Initial paths: ", ps.Paths)
 	return ps, nil
 }
 
@@ -175,65 +175,75 @@ func (dj *DisjointPathselection) UpdatePathSelection() (bool, error) {
 		currentId += lookup.PathToString(p.SnetPath) + "|"
 	}
 
+	logrus.Warn("Looking up id ", currentId)
+
 	newMetrics := dj.remote.AggregateMetrics()
 	dj.metricsMap[currentId] = newMetrics
 
 	logrus.Debug("[DisjointPathselection] UpdatePathSelection called")
 	dj.numUpdates++
 
-	if dj.latestBestWriteBandwidth == 0 {
-		dj.latestBestWriteBandwidth = newMetrics.AverageWriteBandwidth()
-		logrus.Debug("[DisjointPathselection] Set initial latestBestWriteBandwidth to ", dj.latestBestWriteBandwidth)
-	} else {
-		// Compare to best, to make socket re-dial to improve performance
-		if dj.numUpdates%5 == 0 {
-			if newMetrics.AverageWriteBandwidth() > dj.latestBestWriteBandwidth {
-				logrus.Debug("[DisjointPathselection] Got better pathset, reconnecting")
-				dj.latestBestWriteBandwidth = newMetrics.AverageWriteBandwidth()
+	// if dj.latestBestWriteBandwidth == 0 {
+	//	dj.latestBestWriteBandwidth = newMetrics.AverageWriteBandwidth()
+	//	logrus.Debug("[DisjointPathselection] Set initial latestBestWriteBandwidth to ", dj.latestBestWriteBandwidth)
+	//} else {
+	// Compare to best, to make socket re-dial to improve performance
+	if dj.numUpdates%5 == 0 {
+		logrus.Error("[DisjointPathselection] Comparing old bw ", dj.latestBestWriteBandwidth, " to ", newMetrics.LastAverageWriteBandwidth(5))
+		// TODO: This is not working properly here...
+		if newMetrics.LastAverageWriteBandwidth(5) > dj.latestBestWriteBandwidth {
+			logrus.Debug("[DisjointPathselection] Got better pathset, reconnecting")
+			dj.latestBestWriteBandwidth = newMetrics.LastAverageWriteBandwidth(5)
 
-				// Here we have our new path set, from which we start
-				dj.latestPathSet = dj.currentPathSet
-				// Explore new
-				ps, err := dj.GetNextProbingPathset()
-				if err != nil {
-					return false, err
-				}
-				logrus.Debug(ps.Paths)
-				// TODO: Error handling
-				dj.remote.Disconnect()
-
-				// Reconnect
-				err = dj.remote.Connect(&ps, nil)
-				if err != nil {
-					return false, err
-				}
-				logrus.Debug("[DisjointPathselection] Reconnect successfull")
-				return true, nil
-
-			} else {
-				// Explore new
-				ps, err := dj.GetNextProbingPathset()
-				if err != nil {
-					return false, err
-				}
-				logrus.Debug("[DisjointPathselection] Got new pathset, applying paths...")
-				paths := pathselection.UnwrapPathset(ps)
-				logrus.Warn(paths)
-				conns := dj.remote.UnderlaySocket.GetConnections()
-				if len(paths) < len(conns) {
-					logrus.Warn("[DisjointPathSelection] Invalid pathset found...")
-					return false, nil
-				}
-				// Here the number of connections won't change, so we have the same number of connections
-				// as paths
-
-				for i, c := range conns {
-					c.SetPath(&paths[i])
-				}
-				return false, nil
+			// Here we have our new path set, from which we start
+			dj.latestPathSet = dj.currentPathSet
+			// Explore new
+			/*ps, err := dj.GetNextProbingPathset()
+			if err != nil {
+				return false, err
 			}
+			logrus.Debug(ps.Paths)
+			// TODO: Error handling
+			dj.remote.Disconnect()
+
+			// Reconnect
+			err = dj.remote.Connect(&ps, nil)
+			if err != nil {
+				return false, err
+			}
+			logrus.Debug("[DisjointPathselection] Reconnect successfull")
+			return true, nil*/
+
 		}
+
+		// Explore new
+		ps, err := dj.GetNextProbingPathset()
+		if err != nil {
+			return false, err
+		}
+
+		logrus.Debug("[DisjointPathselection] Got new pathset, applying paths...")
+		paths := pathselection.UnwrapPathset(ps)
+
+		if len(ps.Paths) == 0 {
+			paths = dj.latestPathSet
+		}
+		logrus.Warn(paths)
+		conns := dj.remote.UnderlaySocket.GetConnections()
+		if len(paths) < len(conns) {
+			logrus.Warn("[DisjointPathSelection] Invalid pathset found...")
+			return false, nil
+		}
+		// Here the number of connections won't change, so we have the same number of connections
+		// as paths
+
+		for i, c := range conns {
+			c.SetPath(&paths[i])
+		}
+		return false, nil
+
 	}
+	// }
 	return false, nil
 }
 

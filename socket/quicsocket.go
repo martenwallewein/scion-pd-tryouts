@@ -98,7 +98,7 @@ func (qc *QUICReliableConn) GetPath() *snet.Path {
 
 func (qc *QUICReliableConn) SetPath(path *snet.Path) error {
 	qc.path = path
-	qc.metrics.Path = path
+	// qc.metrics.Path = path
 	return nil
 }
 
@@ -186,7 +186,7 @@ func (s *QUICSocket) AggregateMetrics() *packets.PathMetrics {
 
 			}
 		}
-		log.Debug("[QUICSocket] bwMbitsWritten: ", bwMbits, " for path", lookup.PathToString(*m.Path))
+		log.Error("[QUICSocket] bwMbitsWritten: ", bwMbits, " for path", lookup.PathToString(*m.Path))
 	}
 	// TODO: Maybe add other fields
 	pm := &packets.PathMetrics{
