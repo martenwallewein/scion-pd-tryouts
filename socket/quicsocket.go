@@ -33,6 +33,7 @@ type QUICReliableConn struct {
 	metrics      *packets.PathMetrics
 	local        *snet.UDPAddr
 	socketLocal  *snet.UDPAddr
+	selector     *pathselection.FixedSelector
 }
 
 // This simply wraps conn.Read and will later collect metrics
@@ -98,6 +99,10 @@ func (qc *QUICReliableConn) GetPath() *snet.Path {
 
 func (qc *QUICReliableConn) SetPath(path *snet.Path) error {
 	qc.path = path
+	if qc.selector != nil {
+		logrus.Error("SETPATHFROMSNET")
+		qc.selector.SetPathFromSnet(*path)
+	}
 	// qc.metrics.Path = path
 	return nil
 }
@@ -593,6 +598,7 @@ func (s *QUICSocket) Dial(local, remote snet.UDPAddr, path snet.Path) (packets.U
 		remote:       &remote,
 		metrics:      packets.GetMetricsDB().GetOrCreate(s.localAddr, &path),
 		socketLocal:  s.localAddr,
+		selector:     selector,
 		// local:        session.LocalAddr(), // TODO: Local Addr
 	}
 

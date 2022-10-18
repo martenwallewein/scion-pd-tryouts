@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -125,7 +126,45 @@ func (dj *DisjointPathselection) GetNextProbingPathset() (pathselection.PathSet,
 	for i < len(conflictPaths) && j < len(conflictPaths) {
 
 		psId = defaultPsId + lookup.PathToString(conflictPaths[i].Path) + "|" + lookup.PathToString(conflictPaths[j].Path) + "|"
-		if _, ok := dj.metricsMap[psId]; !ok {
+		/*if _, ok := dj.metricsMap[psId]; !ok {
+			logrus.Debug("[DisjointPathselection] Found new Pathset to evaluate: ", psId)
+			// return proper path set
+			paths := make([]snet.Path, 0)
+
+			for k := 0; i < fixedPaths; k++ {
+				paths = append(paths, conflictPaths[k].Path)
+			}
+
+			paths = append(paths, conflictPaths[i].Path)
+			paths = append(paths, conflictPaths[j].Path)
+			return pathselection.WrapPathset(paths), nil
+
+		}*/
+
+		// Advanced check for wrongly sorted paths
+		parts := strings.Split(psId, "|")
+		isPathNewForAlreadyChecked := make([]bool, 0)
+		for _, p := range alreadyCheckedPathsets {
+			newP := false // One path is new
+			for _, v := range parts {
+				if !strings.Contains(p, v) {
+					newP = true
+					break
+				}
+			}
+			isPathNewForAlreadyChecked = append(isPathNewForAlreadyChecked, newP)
+		}
+
+		pathCombinationWasUsedBefore := false
+		// If at least one entry is false, then this one is not new
+		for _, newP := range isPathNewForAlreadyChecked {
+			if !newP {
+				pathCombinationWasUsedBefore = true
+				break
+			}
+		}
+
+		if !pathCombinationWasUsedBefore {
 			logrus.Debug("[DisjointPathselection] Found new Pathset to evaluate: ", psId)
 			// return proper path set
 			paths := make([]snet.Path, 0)
@@ -139,6 +178,7 @@ func (dj *DisjointPathselection) GetNextProbingPathset() (pathselection.PathSet,
 			return pathselection.WrapPathset(paths), nil
 
 		}
+
 		if j == len(conflictPaths)-1 {
 			i++
 			j = i + 1

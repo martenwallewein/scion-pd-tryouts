@@ -110,6 +110,15 @@ func (s *FixedSelector) SetPathFromSnet(p snet.Path) {
 	}
 	path.Fingerprint = pan.PathFingerprint(b.String())
 	s.FixedPath = path
+
+	if s.FixedPath != nil {
+		for i, p := range s.paths {
+			if p.Fingerprint == s.FixedPath.Fingerprint {
+				s.current = i
+				break
+			}
+		}
+	}
 }
 
 func (s *FixedSelector) Close() error {
