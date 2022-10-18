@@ -112,7 +112,7 @@ func (dj *DisjointPathselection) GetNextProbingPathset() (pathselection.PathSet,
 	defaultPsId := ""
 
 	// TODO: ExploreConns is fixed to 2, need to revisit
-	fixedPaths := dj.NumConns - dj.NumExploreConns
+	fixedPaths := dj.NumConns - dj.NumExploreConns - 1
 	for i := 0; i < fixedPaths; i++ {
 		defaultPsId += lookup.PathToString(conflictPaths[i].Path) + "|"
 	}
@@ -121,6 +121,7 @@ func (dj *DisjointPathselection) GetNextProbingPathset() (pathselection.PathSet,
 	// and increase i and j until we find a match or reach the end of the list.
 	i := fixedPaths
 	j := fixedPaths + 1
+	logrus.Debugf("Fixedpaths ", fixedPaths, " i ", i, " j ", j)
 	for i < len(conflictPaths) && j < len(conflictPaths) {
 
 		psId = defaultPsId + lookup.PathToString(conflictPaths[i].Path) + "|" + lookup.PathToString(conflictPaths[j].Path) + "|"
@@ -152,7 +153,22 @@ func (dj *DisjointPathselection) GetNextProbingPathset() (pathselection.PathSet,
 	return pathselection.PathSet{}, nil
 }
 
+func (dj *DisjointPathselection) InitialPathset() (pathselection.PathSet, error) {
+	// Here we have our new path set, from which we start
+	dj.latestPathSet = dj.currentPathSet
+	// Explore new
+	ps, err := dj.GetNextProbingPathset()
+	if err != nil {
+		return ps, err
+	}
+	logrus.Debug(ps.Paths)
+	return ps, nil
+}
+
 func (dj *DisjointPathselection) UpdatePathSelection() (bool, error) {
+	if dj.remote == nil {
+		return false, nil
+	}
 	pathSet := dj.remote.GetCurrentPathset()
 	currentId := ""
 	for _, p := range pathSet.Paths {
@@ -202,9 +218,15 @@ func (dj *DisjointPathselection) UpdatePathSelection() (bool, error) {
 				}
 				logrus.Debug("[DisjointPathselection] Got new pathset, applying paths...")
 				paths := pathselection.UnwrapPathset(ps)
+				logrus.Warn(paths)
+				conns := dj.remote.UnderlaySocket.GetConnections()
+				if len(paths) < len(conns) {
+					logrus.Warn("[DisjointPathSelection] Invalid pathset found...")
+					return false, nil
+				}
 				// Here the number of connections won't change, so we have the same number of connections
 				// as paths
-				conns := dj.remote.UnderlaySocket.GetConnections()
+
 				for i, c := range conns {
 					c.SetPath(&paths[i])
 				}
@@ -233,7 +255,8 @@ func main() {
 		disjointSel := DisjointPathselection{
 			local:           mpSock,
 			metricsMap:      make(map[string]*packets.PathMetrics),
-			NumExploreConns: 2,
+			NumExploreConns: 1,
+			NumConns:        2,
 		}
 
 		go func(dj *DisjointPathselection) {
@@ -285,9 +308,15 @@ func main() {
 			// Here we need to reset the dialing socket
 			// remote.Host.Port = 7999
 			mps.SetPeer(remote)
-			paths, _ := mps.GetAvailablePaths()
+			// Pathselection
+			/*paths, _ := mps.GetAvailablePaths()
 			logrus.Warn(paths)
-			pathset := pathselection.WrapPathset(paths)
+			pathset := pathselection.WrapPathset(paths)*/
+			pathset, err := disjointSel.InitialPathset()
+			if err != nil {
+				log.Fatal("Failed to obtain pathset", err)
+				os.Exit(1)
+			}
 			pathset.Address = *remote
 			err = mps.Connect(&pathset, nil)
 			if err != nil {
@@ -297,8 +326,8 @@ func main() {
 			logrus.Error("SUCCESS")
 			i++
 			go func(mps *smp.PanSocket) {
-				ReadAllConns(mps)
-				logrus.Warn("Done reading all conns to ", mps.Peer.String())
+				WriteAllConns(mps)
+				logrus.Warn("Done writing all conns to ", mps.Peer.String())
 			}(mps)
 		}
 
@@ -330,7 +359,7 @@ func main() {
 				os.Exit(1)
 			}
 			logrus.Info("Got conn back from remote ", new.String())
-			WriteAllConns(mpSock)
+			ReadAllConns(mpSock)
 		}
 	}
 
@@ -351,6 +380,7 @@ func ReadAllConns(mps *smp.PanSocket) {
 			for {
 				_, err := c.Read(bts)
 				if err != nil {
+					logrus.Error(err)
 					wg.Done()
 				}
 			}
@@ -370,6 +400,7 @@ func WriteAllConns(mps *smp.PanSocket) {
 			for {
 				_, err := c.Write(bts)
 				if err != nil {
+					logrus.Error(err)
 					wg.Done()
 				}
 			}

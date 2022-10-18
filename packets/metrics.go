@@ -8,6 +8,7 @@ import (
 
 	lookup "github.com/martenwallewein/scion-pathdiscovery/pathlookup"
 	"github.com/scionproto/scion/go/lib/snet"
+	"github.com/sirupsen/logrus"
 )
 
 type MetricsDB struct {
@@ -25,7 +26,9 @@ func GetMetricsDB() *MetricsDB {
 }
 
 func mustInitMetricsDB() {
-	singletonMetricsDB = MetricsDB{}
+	singletonMetricsDB = MetricsDB{
+		Data: map[string]*PathMetrics{},
+	}
 }
 
 func (mdb *MetricsDB) Tick() {
@@ -33,10 +36,12 @@ func (mdb *MetricsDB) Tick() {
 }
 
 func (mdb *MetricsDB) GetBySocket(local *snet.UDPAddr) []*PathMetrics {
+	logrus.Trace("[MetricsDB] Get metrics for local ", local)
 	id := local.String()
 	metrics := make([]*PathMetrics, 0)
 	for k, v := range mdb.Data {
 		if strings.Contains(k, id) {
+			logrus.Trace("[MetricsDB] Got written bw ", v.WrittenBandwidth, " for path ", lookup.PathToString(*v.Path))
 			metrics = append(metrics, v)
 		}
 	}
@@ -45,8 +50,24 @@ func (mdb *MetricsDB) GetBySocket(local *snet.UDPAddr) []*PathMetrics {
 }
 
 func (mdb *MetricsDB) GetOrCreate(local *snet.UDPAddr, path *snet.Path) *PathMetrics {
-	id := fmt.Sprintf("%s-%s", local.String(), lookup.PathToString(*path))
-	m, ok := mdb.Data[id]
+	ok := false
+	var m *PathMetrics
+	var id string
+	if local == nil {
+		id = lookup.PathToString(*path)
+		for k, v := range mdb.Data {
+			if strings.Contains(k, id) {
+				ok = true
+				m = v
+				break
+			}
+		}
+	} else {
+		id = fmt.Sprintf("%s-%s", local.String(), lookup.PathToString(*path))
+		m, ok = mdb.Data[id]
+	}
+
+	logrus.Trace("[MetricsDB] Check for id ", id, ", got ", ok)
 	if !ok {
 		pm := NewPathMetrics(mdb.UpdateInterval)
 		pm.Path = path
@@ -85,6 +106,9 @@ func NewPathMetrics(updateInterval time.Duration) *PathMetrics {
 
 func (m *PathMetrics) AverageReadBandwidth() int64 {
 	size := len(m.ReadBandwidth)
+	if size == 0 {
+		return 0
+	}
 	var val int64
 	for _, item := range m.ReadBandwidth {
 		val += item
@@ -96,6 +120,9 @@ func (m *PathMetrics) AverageReadBandwidth() int64 {
 
 func (m *PathMetrics) AverageWriteBandwidth() int64 {
 	size := len(m.WrittenBandwidth)
+	if size == 0 {
+		return 0
+	}
 	var val int64
 	for _, item := range m.WrittenBandwidth {
 		val += item

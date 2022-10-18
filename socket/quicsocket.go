@@ -32,6 +32,7 @@ type QUICReliableConn struct {
 	remote       *snet.UDPAddr
 	metrics      *packets.PathMetrics
 	local        *snet.UDPAddr
+	socketLocal  *snet.UDPAddr
 }
 
 // This simply wraps conn.Read and will later collect metrics
@@ -40,16 +41,19 @@ func (qc *QUICReliableConn) Read(b []byte) (int, error) {
 	if err != nil {
 		return n, err
 	}
-	qc.metrics.ReadBytes += int64(n)
-	qc.metrics.ReadPackets++
+	m := qc.GetMetrics()
+	m.ReadBytes += int64(n)
+	m.ReadPackets++
 	return n, err
 }
 
 // This simply wraps conn.Write and will later collect metrics
 func (qc *QUICReliableConn) Write(b []byte) (int, error) {
 	n, err := qc.internalConn.Write(b)
-	qc.metrics.WrittenBytes += int64(n)
-	qc.metrics.WrittenPackets++
+
+	m := qc.GetMetrics()
+	m.WrittenBytes += int64(n)
+	m.WrittenPackets++
 	if err != nil {
 		return n, err
 	}
@@ -84,7 +88,8 @@ func (qc *QUICReliableConn) Close() error {
 }
 
 func (qc *QUICReliableConn) GetMetrics() *packets.PathMetrics {
-	return qc.metrics
+	// return qc.metrics
+	return packets.GetMetricsDB().GetOrCreate(qc.socketLocal, qc.path)
 }
 
 func (qc *QUICReliableConn) GetPath() *snet.Path {
@@ -93,6 +98,7 @@ func (qc *QUICReliableConn) GetPath() *snet.Path {
 
 func (qc *QUICReliableConn) SetPath(path *snet.Path) error {
 	qc.path = path
+	qc.metrics.Path = path
 	return nil
 }
 
@@ -148,6 +154,7 @@ func (s *QUICSocket) Local() *snet.UDPAddr {
 
 func (s *QUICSocket) AggregateMetrics() *packets.PathMetrics {
 	ms := packets.GetMetricsDB().GetBySocket(s.localAddr)
+
 	sumBwMbitsRead := make([]int64, 0)
 	sumBwMbitsWrite := make([]int64, 0)
 	for i, m := range ms {
@@ -165,6 +172,7 @@ func (s *QUICSocket) AggregateMetrics() *packets.PathMetrics {
 
 			}
 		}
+		bwMbits = make([]int64, 0)
 		for j, b := range m.WrittenBandwidth {
 			val := int64(float64(b*8) / 1024 / 1024)
 			bwMbits = append(bwMbits, val)
@@ -178,7 +186,7 @@ func (s *QUICSocket) AggregateMetrics() *packets.PathMetrics {
 
 			}
 		}
-		log.Error(bwMbits)
+		log.Debug("[QUICSocket] bwMbitsWritten: ", bwMbits, " for path", lookup.PathToString(*m.Path))
 	}
 	// TODO: Maybe add other fields
 	pm := &packets.PathMetrics{
@@ -203,6 +211,7 @@ func NewQUICSocket(local string) *QUICSocket {
 func (s *QUICSocket) Listen() error {
 	logrus.Debug("[QuicSocket] Listening on ", s.local, " ...")
 	lAddr, err := snet.ParseUDPAddr(s.local)
+	s.localAddr = lAddr
 	if err != nil {
 		return err
 	}
@@ -219,7 +228,6 @@ func (s *QUICSocket) Listen() error {
 		return err
 	}
 
-	s.localAddr = lAddr
 	s.listener = listener
 	logrus.Debug("[QuicSocket] Listen on ", s.local, " successful")
 	return err
@@ -291,6 +299,7 @@ func (s *QUICSocket) WaitForIncomingConn(lAddr snet.UDPAddr) (packets.UDPConn, e
 		remote:       &p.Addr,
 		metrics:      packets.GetMetricsDB().GetOrCreate(s.localAddr, &p.Path),
 		local:        &lAddr,
+		socketLocal:  s.localAddr,
 	}
 
 	s.conns = append(s.conns, quicConn)
@@ -583,6 +592,7 @@ func (s *QUICSocket) Dial(local, remote snet.UDPAddr, path snet.Path) (packets.U
 		path:         &path,
 		remote:       &remote,
 		metrics:      packets.GetMetricsDB().GetOrCreate(s.localAddr, &path),
+		socketLocal:  s.localAddr,
 		// local:        session.LocalAddr(), // TODO: Local Addr
 	}
 
