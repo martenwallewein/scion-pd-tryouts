@@ -10,13 +10,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// DefaultSelector is a Selector for a single dialed socket.
-// This will keep using the current path, starting with the first path chosen
-// by the policy, as long possible.
-// Faults are detected passively via SCMP down notifications; whenever such
-// a down notification affects the current path, the DefaultSelector will
-// switch to the first path (in the order defined by the policy) that is not
-// affected by down notifications.
+// Fixed is a Selector for a single dialed socket using a fixed path.
+
 type FixedSelector struct {
 	mutex     sync.Mutex
 	paths     []*pan.Path
@@ -76,8 +71,8 @@ func (s *FixedSelector) Refresh(paths []*pan.Path) {
 }
 
 func (s *FixedSelector) PathDown(pf pan.PathFingerprint, pi pan.PathInterface) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	// s.mutex.Lock()
+	// defer s.mutex.Unlock()
 
 	// We react to this externally...
 	/*current := s.paths[s.current]

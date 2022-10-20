@@ -1,6 +1,7 @@
 package pathselection
 
-/*
+import "sort"
+
 type byHopCount []PathQuality
 
 func (pathSet byHopCount) Len() int {
@@ -12,11 +13,11 @@ func (pathSet byHopCount) Swap(i, j int) {
 }
 
 func (pathSet byHopCount) Less(i, j int) bool {
-	return len(pathSet[i].Path.Metadata().Interfaces) < len(pathSet[j].Path.Metadata().Interfaces)
+	return len(pathSet[i].SnetPath.Metadata().Interfaces) < len(pathSet[j].SnetPath.Metadata().Interfaces)
 }
 
 // GetPathSmallHopCount Select the shortest paths from given path array
 func (pathSet *PathSet) GetPathSmallHopCount(number int) *PathSet {
 	sort.Sort(byHopCount(pathSet.Paths))
 	return SelectPaths(number, pathSet)
-}*/
+}

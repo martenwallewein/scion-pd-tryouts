@@ -1,6 +1,10 @@
 package pathselection
 
-/*
+import (
+	"sort"
+	"time"
+)
+
 type byLatency []PathQuality
 
 func (pathSet byLatency) Len() int {
@@ -12,7 +16,7 @@ func (pathSet byLatency) Swap(i, j int) {
 }
 
 func (pathSet byLatency) Less(i, j int) bool {
-	return sumupLatencies(pathSet[i].Path.Metadata().Latency) < sumupLatencies(pathSet[j].Path.Metadata().Latency)
+	return sumupLatencies(pathSet[i].SnetPath.Metadata().Latency) < sumupLatencies(pathSet[j].SnetPath.Metadata().Latency)
 }
 
 func sumupLatencies(latencies []time.Duration) (totalLatency time.Duration) {
@@ -30,4 +34,3 @@ func (pathSet *PathSet) GetPathLowLatency(number int) *PathSet {
 	sort.Sort(byLatency(pathSet.Paths))
 	return SelectPaths(number, pathSet)
 }
-*/
